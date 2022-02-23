@@ -48,7 +48,6 @@
 
 include("${CMAKE_CURRENT_LIST_DIR}/Wolfram/Common.cmake")
 
-set(_MMA_CONSIDERED_VERSIONS 12.2;12.1;12.0) # LLU requires WL 12.0+, so we do not look for older versions
 set(_MMA_FIND_NAMES WolframDesktop wolframdesktop Mathematica mathematica WolframKernel wolfram)
 set(_MMA_FIND_SUFFIXES Executables MacOS Contents/MacOS)
 set(_MMA_FIND_DOC "Location of WolframLanguage interpreter executable")
@@ -105,6 +104,17 @@ macro(find_wolfram_language_from_hint)
 	endif()
 endmacro()
 
+macro(find_wolfram_language_from_env)
+	if(IS_DIRECTORY "$ENV{MATHEMATICA_HOME}")
+		find_program(WolframLanguage_EXE
+			NAMES ${_MMA_FIND_NAMES}
+			HINTS "$ENV{MATHEMATICA_HOME}"
+			PATH_SUFFIXES ${_MMA_FIND_SUFFIXES}
+			DOC ${_MMA_FIND_DOC}
+			NO_DEFAULT_PATH)
+	endif()
+endmacro()
+
 macro(find_wolfram_language_on_path)
 	find_program(WolframLanguage_EXE
 		NAMES ${_MMA_FIND_NAMES}
@@ -112,14 +122,15 @@ macro(find_wolfram_language_on_path)
 		DOC ${_MMA_FIND_DOC})
 endmacro()
 
-function(find_wolfram_language_in_default_dir WolframLanguage_VERSION)
-	get_default_wolfram_dirs(${WolframLanguage_VERSION} _DEFAULT_DIRS)
+function(find_wolfram_language_in_default_dir)
+	get_default_wolfram_dirs(_DEFAULT_DIRS)
 	find_program(WolframLanguage_EXE
 		NAMES ${_MMA_FIND_NAMES}
 		HINTS ${_DEFAULT_DIRS}
 		PATH_SUFFIXES ${_MMA_FIND_SUFFIXES}
 		DOC ${_MMA_FIND_DOC}
-		NO_DEFAULT_PATH)
+		NO_DEFAULT_PATH
+		NAMES_PER_DIR)
 endfunction()
 
 # Locate wolframscript executable, preferably within WolframLanguage_INSTALL_DIR, if defined
@@ -141,13 +152,20 @@ endfunction()
 # First, respect user-provided hints
 find_wolfram_language_from_hint()
 
-# If no hint provided, search default installation directories
-foreach(_MMA_VER IN LISTS _MMA_CONSIDERED_VERSIONS)
-	find_wolfram_language_in_default_dir(${_MMA_VER})
-endforeach()
+# If no hint provided, look for the environment variable MATHEMATICA_HOME
+if(NOT WolframLanguage_EXE)
+	find_wolfram_language_from_env()
+endif()
+
+# If no hint or env variable set, search default installation directories
+if(NOT WolframLanguage_EXE)
+	find_wolfram_language_in_default_dir()
+endif()
 
 # Finally, try looking for WolframLanguage on the system path and wherever CMake looks by default
-find_wolfram_language_on_path()
+if(NOT WolframLanguage_EXE)
+	find_wolfram_language_on_path()
+endif()
 
 if (WolframLanguage_EXE)
 	get_filename_component(WolframLanguage_EXE_REALPATH ${WolframLanguage_EXE} REALPATH)
@@ -164,7 +182,7 @@ if (WolframLanguage_EXE)
 
 	parse_wolfram_language_version(${_WolframLanguage_DIRECTORY} WolframLanguage_VERSION)
 
-	set(WolframLanguage_INSTALL_DIR ${_WolframLanguage_DIRECTORY} CACHE PATH "Path to the root folder of WolframLanguage installation.")
+	set(WolframLanguage_INSTALL_DIR ${_WolframLanguage_DIRECTORY} CACHE PATH "Path to the root folder of WolframLanguage installation." FORCE)
 endif()
 
 foreach(_COMP IN LISTS WolframLanguage_FIND_COMPONENTS)

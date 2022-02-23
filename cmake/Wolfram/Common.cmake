@@ -30,29 +30,34 @@ function(get_default_mathematica_dir MATHEMATICA_VERSION DEFAULT_MATHEMATICA_INS
 	set(${DEFAULT_MATHEMATICA_INSTALL_DIR} "${_M_INSTALL_DIR}" PARENT_SCOPE)
 endfunction()
 
-function(get_wolfram_product_default_dirs PRODUCT_NAME PRODUCT_VERSION DEFAULT_PRODUCT_INSTALL_DIR)
+
+# Give a list of possible installation of a given Wolfram product
+# This function checks default installation directories for existing subdirectories
+# It does not verify if all subdirectories actually contain a valid installation. This is done later.
+function(get_wolfram_product_default_dirs PRODUCT_NAME DEFAULT_PRODUCT_INSTALL_DIRS)
 	set(_DEFAULT_INSTALL_DIR NOTFOUND)
 	if(APPLE)
-		set(_DEFAULT_INSTALL_DIR
-			"/Applications/${PRODUCT_NAME} ${PRODUCT_VERSION}.app"
-			"/Applications/${PRODUCT_NAME}.app")
+		file(GLOB _DEFAULT_INSTALL_DIR "/Applications/${PRODUCT_NAME}*.app")
 	elseif(WIN32)
-		set(_DEFAULT_INSTALL_DIR "C:/Program\ Files/Wolfram\ Research/${PRODUCT_NAME}/${PRODUCT_VERSION}")
+		file(GLOB _DEFAULT_INSTALL_DIR "C:/Program\ Files/Wolfram\ Research/${PRODUCT_NAME}/*")
 	else()
-		set(_DEFAULT_INSTALL_DIR "/usr/local/Wolfram/${PRODUCT_NAME}/${PRODUCT_VERSION}")
+		file(GLOB _DEFAULT_INSTALL_DIR "/usr/local/Wolfram/${PRODUCT_NAME}/*")
 	endif()
-	set(${DEFAULT_PRODUCT_INSTALL_DIR} "${_DEFAULT_INSTALL_DIR}" PARENT_SCOPE)
+	message(DEBUG "Found possible installations of ${PRODUCT_NAME}: ${_DEFAULT_INSTALL_DIR}")
+	set(${DEFAULT_PRODUCT_INSTALL_DIRS} "${_DEFAULT_INSTALL_DIR}" PARENT_SCOPE)
 endfunction()
 
-function(get_default_wolfram_dirs WL_VERSION DEFAULT_INSTALL_DIRS)
-	get_wolfram_product_default_dirs(WolframDesktop ${WL_VERSION} _WD_INSTALL_DIRS)
-	get_wolfram_product_default_dirs(Mathematica ${WL_VERSION} _M_INSTALL_DIRS)
-	get_wolfram_product_default_dirs(WolframEngine ${WL_VERSION} _WE_INSTALL_DIRS)
-	set(${DEFAULT_INSTALL_DIRS}
+function(get_default_wolfram_dirs DEFAULT_INSTALL_DIRS)
+	get_wolfram_product_default_dirs(WolframDesktop _WD_INSTALL_DIRS)
+	get_wolfram_product_default_dirs(Mathematica _M_INSTALL_DIRS)
+	get_wolfram_product_default_dirs(WolframEngine _WE_INSTALL_DIRS)
+	set(_ALL_INSTALL_DIRS
 		"${_WD_INSTALL_DIRS}"
 		"${_M_INSTALL_DIRS}"
-		"${_WE_INSTALL_DIRS}"
-		PARENT_SCOPE)
+		"${_WE_INSTALL_DIRS}")
+	list(SORT _ALL_INSTALL_DIRS COMPARE FILE_BASENAME ORDER DESCENDING)
+	message(VERBOSE "Found possible Wolfram Language installations: ${_ALL_INSTALL_DIRS}")
+	set(${DEFAULT_INSTALL_DIRS} "${_ALL_INSTALL_DIRS}" PARENT_SCOPE)
 endfunction()
 
 function(detect_system_id DETECTED_SYSTEM_ID)
@@ -69,7 +74,11 @@ function(detect_system_id DETECTED_SYSTEM_ID)
 		if(CMAKE_C_COMPILER MATCHES "androideabi")
 			set(INITIAL_SYSTEMID Android)
 		elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "arm*")
-			set(INITIAL_SYSTEMID Linux-ARM)
+			if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+				set(INITIAL_SYSTEMID Linux-ARM)
+			else()
+				set(INITIAL_SYSTEMID MacOSX-ARM64)
+			endif()
 		elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND BITNESS EQUAL 64)
 			set(INITIAL_SYSTEMID Linux-x86-64)
 		elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND BITNESS EQUAL 32)
@@ -152,7 +161,7 @@ function(get_wstp_library_name WSTP_INTERFACE_VERSION WSTP_LIB_NAME)
 	detect_system_id(SYSTEM_ID)
 
 	set(WSTP_LIBRARY NOTFOUND)
-	if(SYSTEM_ID STREQUAL "MacOSX-x86-64")
+	if(SYSTEM_ID MATCHES "MacOSX-")
 		set(WSTP_LIBRARY "WSTPi${WSTP_INTERFACE_VERSION}")
 	elseif(SYSTEM_ID STREQUAL "Linux" OR SYSTEM_ID STREQUAL "Linux-ARM" OR SYSTEM_ID STREQUAL "Windows")
 		set(WSTP_LIBRARY "WSTP32i${WSTP_INTERFACE_VERSION}")
@@ -182,7 +191,7 @@ endfunction()
 function(set_machine_flags TARGET_NAME)
 	detect_system_id(SYSTEM_ID)
 
-	if(SYSTEM_ID MATCHES "-x86-64")
+	if(SYSTEM_ID MATCHES "64$")
 		if(MSVC)
 			set_target_properties(${TARGET_NAME} PROPERTIES LINK_FLAGS "/MACHINE:x64")
 		else()
@@ -230,7 +239,7 @@ endfunction()
 # Detects whether a library is shared or static.
 # This should be used to set the type in add_library() for dependency libraries.
 function(detect_library_type LIBRARY TYPE_VAR)
-	get_filename_component(_EXT ${LIBRARY} EXT)
+	get_filename_component(_EXT "${LIBRARY}" LAST_EXT)
 	if("${_EXT}" STREQUAL "${CMAKE_SHARED_LIBRARY_SUFFIX}")
 		set(${TYPE_VAR} SHARED PARENT_SCOPE)
 	elseif("${_EXT}" STREQUAL "${CMAKE_STATIC_LIBRARY_SUFFIX}")
@@ -238,7 +247,7 @@ function(detect_library_type LIBRARY TYPE_VAR)
 			# On Windows, the .lib is present for both static and shared libraries, so check whether it contains exported symbols.
 			# Failing that, check whether a similarly named .dll file exists in the same directory.
 			execute_process(
-					COMMAND dumpbin /exports ${LIBRARY}
+					COMMAND dumpbin /exports "${LIBRARY}"
 					COMMAND grep -w Exports
 					RESULT_VARIABLE _RESULT
 					OUTPUT_VARIABLE _OUTPUT
@@ -250,9 +259,9 @@ function(detect_library_type LIBRARY TYPE_VAR)
 					set(${TYPE_VAR} STATIC PARENT_SCOPE)
 				endif()
 			else()
-				get_filename_component(_PATH ${LIBRARY} DIRECTORY)
-				get_filename_component(_NAME ${LIBRARY} NAME_WE)
-				if(EXISTS ${_PATH}/${_NAME}.dll)
+				get_filename_component(_PATH "${LIBRARY}" DIRECTORY)
+				get_filename_component(_NAME "${LIBRARY}" NAME_WLE)
+				if(EXISTS "${_PATH}/${_NAME}.dll")
 					set(${TYPE_VAR} SHARED PARENT_SCOPE)
 				else()
 					set(${TYPE_VAR} STATIC PARENT_SCOPE)
@@ -271,14 +280,14 @@ endfunction()
 # Creating the target with the correct type allows useful target properties to be automatically set such as TYPE, RUNTIME_OUTPUT_NAME etc.
 # Optional 3rd arg is a variable to return the detected library type in.
 function(add_imported_target_detect_type TARGET_NAME LIBRARY)
-	fail_if_dne(${LIBRARY})
-	detect_library_type(${LIBRARY} LIBRARY_TYPE)
+	fail_if_dne("${LIBRARY}")
+	detect_library_type("${LIBRARY}" LIBRARY_TYPE)
 	add_library(${TARGET_NAME} ${LIBRARY_TYPE} IMPORTED)
 	# IMPORTED_LOCATION is the .dll component for SHARED targets on Windows. See: https://cmake.org/cmake/help/latest/prop_tgt/IMPORTED_LOCATION.html
 	if(${LIBRARY_TYPE} STREQUAL SHARED)
 		string(REPLACE ".lib" ".dll" LIBRARY_DLL "${LIBRARY}")
 	else()
-		set(LIBRARY_DLL ${LIBRARY})
+		set(LIBRARY_DLL "${LIBRARY}")
 	endif()
 	# IMPORTED_IMPLIB is the .lib component for imported targets on Windows. See: https://cmake.org/cmake/help/latest/prop_tgt/IMPORTED_IMPLIB.html
 	string(REPLACE ".dll" ".lib" LIBRARY_LIB "${LIBRARY}")
@@ -295,9 +304,9 @@ endfunction()
 # Optional arguments are the libraries to copy (defaults to main target file plus its dependencies).
 function(install_dependency_files PACLET_NAME DEP_TARGET_NAME)
 	get_target_property(_DEP_TYPE ${DEP_TARGET_NAME} TYPE)
-	if("${_DEP_TYPE}" STREQUAL UNKNOWN_LIBRARY)
+	if("${_DEP_TYPE}" MATCHES "UNKNOWN(_LIBRARY)?")
 		get_target_property(_DEP_LIBRARY ${DEP_TARGET_NAME} IMPORTED_LOCATION)
-		detect_library_type(${_DEP_LIBRARY} _DEP_TYPE)
+		detect_library_type("${_DEP_LIBRARY}" _DEP_TYPE)
 	endif()
 	if("${_DEP_TYPE}" MATCHES "SHARED(_LIBRARY)?")
 		if(ARGC GREATER_EQUAL 3)
@@ -320,18 +329,20 @@ function(install_dependency_files PACLET_NAME DEP_TARGET_NAME)
 				list(REMOVE_DUPLICATES DEP_AUX_LIBS)
 			endif()
 			string(REPLACE "${CMAKE_STATIC_LIBRARY_SUFFIX}" "${CMAKE_SHARED_LIBRARY_SUFFIX}" DEP_AUX_LIBS_DLL "${DEP_AUX_LIBS}")
-			foreach(lib ${DEP_AUX_LIBS_DLL})
-				if(EXISTS ${lib})
-					list(APPEND DEP_LIBS_DLL ${lib})
+			foreach(lib IN LISTS DEP_AUX_LIBS_DLL)
+				if(EXISTS "${lib}")
+					list(APPEND DEP_LIBS_DLL "${lib}")
 				endif()
 			endforeach()
 		endif()
-		# Copy over dependency libraries into LibraryResources/$SystemID
-		detect_system_id(SYSTEMID)
-		install(FILES
-				${DEP_LIBS_DLL}
-				DESTINATION ${PACLET_NAME}/LibraryResources/${SYSTEMID}
-				)
+		if(DEP_LIBS_DLL)
+			# Copy over dependency libraries into LibraryResources/$SystemID
+			detect_system_id(SYSTEMID)
+			install(FILES
+					${DEP_LIBS_DLL}
+					DESTINATION ${PACLET_NAME}/LibraryResources/${SYSTEMID}
+					)
+		endif()
 	endif()
 endfunction()
 
@@ -366,14 +377,30 @@ function(set_default_compile_options TARGET_NAME OPTIMIZATION_LEVEL)
 	endif()
 endfunction()
 
-# Forces static runtime on Windows. See https://gitlab.kitware.com/cmake/community/wikis/FAQ#dynamic-replace
+# Forces static runtime on Windows. For CMake 3.15+ you must provide target name as an argument for this macro unless you disable policy CMP0091.
 macro(set_windows_static_runtime)
 	if(WIN32)
-		foreach(flag_var CMAKE_CXX_FLAGS CMAKE_CXX_FLAGS_DEBUG CMAKE_CXX_FLAGS_RELEASE CMAKE_CXX_FLAGS_MINSIZEREL CMAKE_CXX_FLAGS_RELWITHDEBINFO)
-			if(${flag_var} MATCHES "/MD")
-				string(REGEX REPLACE "/MD" "/MT" ${flag_var} "${${flag_var}}")
+		cmake_policy(GET CMP0091 _MSVC_RUNTIME_POLICY)
+		if(_MSVC_RUNTIME_POLICY STREQUAL NEW)
+			# If CMAKE_MSVC_RUNTIME_LIBRARY is not set, one cannot specify this property per target, so we need to provide some initial value
+			# See https://cmake.org/cmake/help/latest/variable/CMAKE_MSVC_RUNTIME_LIBRARY.html
+			if(NOT CMAKE_MSVC_RUNTIME_LIBRARY)
+				set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 			endif()
-		endforeach()
+			# See https://cmake.org/cmake/help/latest/prop_tgt/MSVC_RUNTIME_LIBRARY.html
+			if(${ARGC} GREATER 0)
+				# If the user provided target name, set MSVC_RUNTIME_LIBRARY only for this target
+				set(TARGET_NAME ${ARGV0})
+				set_target_properties(${TARGET_NAME} PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+			endif()
+		else()
+			# See https://gitlab.kitware.com/cmake/community/wikis/FAQ#dynamic-replace
+			foreach(flag_var CMAKE_CXX_FLAGS CMAKE_CXX_FLAGS_DEBUG CMAKE_CXX_FLAGS_RELEASE CMAKE_CXX_FLAGS_MINSIZEREL CMAKE_CXX_FLAGS_RELWITHDEBINFO)
+				if(${flag_var} MATCHES "/MD")
+					string(REGEX REPLACE "/MD" "/MT" ${flag_var} "${${flag_var}}")
+				endif()
+			endforeach()
+		endif()
 	endif()
 endmacro()
 
